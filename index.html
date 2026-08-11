@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebSocket / DDS 调试工具</title>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+  --yellow: #d2991d; --text: #c9d1d9; --text2: #8b949e;
+  --send: #1a3a5c; --recv: #1a2e1a;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  background: var(--bg); color: var(--text); height: 100vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.header {
+  background: var(--surface); padding: 8px 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.header h1 { font-size: 14px; font-weight: 600; color: var(--accent); }
+.header .mode-tabs { display: flex; gap: 4px; }
+.mode-tab {
+  padding: 4px 14px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text2); font-size: 12px;
+  cursor: pointer; transition: all .15s; font-family: inherit;
+}
+.mode-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.header .status { font-size: 11px; display: flex; align-items: center; gap: 6px; }
+.panels { padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.panel { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.panel.hidden { display: none; }
+.panel label { font-size: 11px; color: var(--text2); white-space: nowrap; }
+.panel input[type="text"], .panel input[type="number"] {
+  padding: 5px 8px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 12px; font-family: inherit;
+  width: 140px; outline: none;
+}
+.panel input:focus { border-color: var(--accent); }
+.panel input.small { width: 80px; }
+.panel input.wide { width: 240px; }
+.panel input.port { width: 70px; }
+.panel input[type="checkbox"] { accent-color: var(--accent); }
+.panel button {
+  padding: 5px 16px; border-radius: 4px; border: none;
+  font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
+  transition: opacity .15s;
+}
+.btn-green { background: var(--green); color: #000; }
+.btn-red { background: var(--red); color: #fff; }
+.btn-blue { background: var(--accent); color: #fff; }
+.panel button:hover { opacity: 0.8; }
+.panel button:disabled { opacity: 0.3; cursor: default; }
+.panel .hint { font-size: 10px; color: var(--text2); }
+.log { flex: 1; overflow-y: auto; padding: 8px 0; font-size: 12px; line-height: 1.6; background: var(--bg); }
+.log-entry { display: flex; padding: 2px 16px; gap: 8px; border-bottom: 1px solid rgba(48,54,61,.3); }
+.log-entry.system { color: var(--text2); font-style: italic; }
+.log-entry.send { background: rgba(26,58,92,.15); }
+.log-entry.recv { background: rgba(26,46,26,.15); }
+.log-entry.error { color: var(--red); }
+.log-time { color: var(--text2); white-space: nowrap; min-width: 70px; font-size: 11px; }
+.log-dir { min-width: 28px; text-align: center; font-weight: 700; font-size: 11px; }
+.log-dir.send { color: var(--accent); }
+.log-dir.recv { color: var(--green); }
+.log-dir.sys { color: var(--text2); }
+.log-peer { color: var(--yellow); min-width: 80px; font-size: 11px; white-space: nowrap; }
+.log-body { flex:1; white-space: pre-wrap; word-break: break-word; }
+.log-body.json { color: #79c0ff; }
+.input-bar {
+  display: flex; padding: 8px 12px; background: var(--surface);
+  border-top: 1px solid var(--border); gap: 8px; flex-shrink: 0;
+}
+.input-bar input {
+  flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; outline: none;
+}
+.input-bar input:focus { border-color: var(--accent); }
+.input-bar button {
+  padding: 8px 18px; border-radius: 4px; border: none;
+  background: var(--accent); color: #fff; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit;
+}
+.input-bar button:disabled { opacity: 0.3; cursor: default; }
+.footer {
+  padding: 4px 16px; background: var(--surface); border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text2); display: flex; justify-content: space-between; flex-shrink: 0;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>WebSocket / DDS 调试工具</h1>
+  <div class="mode-tabs">
+    <select id="protoSelect" onchange="switchProto(this.value)" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;font-family:inherit;outline:none;margin-right:8px;">
+      <option value="websocket">WebSocket</option>
+      <option value="dds">DDS</option>
+    </select>
+    <button class="mode-tab active" data-mode="server" onclick="switchMode('server')">Server</button>
+    <button class="mode-tab" data-mode="client" onclick="switchMode('client')">Client</button>
+    <button class="mode-tab hidden" data-mode="dds-pub" onclick="switchMode('dds-pub')">Publisher</button>
+    <button class="mode-tab hidden" data-mode="dds-sub" onclick="switchMode('dds-sub')">Subscriber</button>
+  </div>
+  <div class="status">
+    <span id="statusDot" style="width:7px;height:7px;border-radius:50%;display:inline-block;background:#f85149"></span>
+    <span id="statusText">等待面板连接...</span>
+  </div>
+</div>
+
+<div class="panels">
+<div class="panel" id="panelServer">
+  <label>Host:</label><input type="text" value="0.0.0.0" id="srvHost" class="small">
+  <label>Port:</label><input type="number" value="8765" id="srvPort" class="port" min="1024" max="65535">
+  <label><input type="checkbox" id="srvBroadcast"> 广播</label>
+  <button class="btn-green" id="btnStartServer" onclick="startServer()">启动服务器</button>
+  <button class="btn-red hidden" id="btnStopServer" onclick="stopServer()">停止</button>
+  <span class="hint" id="srvHint"></span>
+</div>
+<div class="panel hidden" id="panelClient">
+  <label>URL:</label><input type="text" value="ws://localhost:8765" id="cliUrl" class="wide">
+  <label>超时(s):</label><input type="number" value="10" id="cliTimeout" class="port" min="1">
+  <button class="btn-blue" id="btnConnect" onclick="startClient()">连接</button>
+  <button class="btn-red hidden" id="btnDisconnect" onclick="stopClient()">断开</button>
+  <span class="hint" id="cliHint"></span>
+</div>
+
+<!-- DDS Publisher 面板 -->
+<div class="panel hidden" id="panelDdsPub">
+  <label>Domain:</label><input type="number" value="0" id="ddsDomain" class="port" min="0">
+  <label>Topic:</label><input type="text" value="DdsDebug" id="ddsTopic" class="small">
+  <button class="btn-green" id="btnStartPub" onclick="startDdsPub()">启动发布</button>
+  <button class="btn-red hidden" id="btnStopPub" onclick="stopDdsPub()">停止</button>
+  <span class="hint" id="pubHint"></span>
+</div>
+
+<!-- DDS Subscriber 面板 -->
+<div class="panel hidden" id="panelDdsSub">
+  <label>Domain:</label><input type="number" value="0" id="ddsSubDomain" class="port" min="0">
+  <label>Topic:</label><input type="text" value="DdsDebug" id="ddsSubTopic" class="small">
+  <button class="btn-blue" id="btnStartSub" onclick="startDdsSub()">启动订阅</button>
+  <button class="btn-red hidden" id="btnStopSub" onclick="stopDdsSub()">停止</button>
+  <span class="hint" id="subHint"></span>
+</div>
+</div>
+
+<div class="log" id="log"></div>
+
+<div class="input-bar">
+  <input id="msgInput" type="text" placeholder="输入消息，Enter 发送，支持 JSON..." disabled>
+  <button id="sendBtn" disabled onclick="sendMsg()">发送</button>
+</div>
+
+<div class="footer">
+  <span id="footerLeft">就绪</span>
+  <span id="footerRight">发送 0 / 接收 0</span>
+</div>
+
+<script>
+let ctrlWs = null, activeMode = 'server', activeProto = 'websocket';
+let serverRunning = false, clientConnected = false, pubActive = false, subActive = false;
+let msgSent = 0, msgRecv = 0;
+
+const PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
+const CTRL_URL = PROTO + '://' + location.host + '/__ws__';
+
+function connectCtrl() {
+  if (ctrlWs && ctrlWs.readyState === WebSocket.OPEN) return;
+  ctrlWs = new WebSocket(CTRL_URL);
+  ctrlWs.onopen = () => {
+    setStatus('online', '面板已连接');
+    addLog('system', '', '', '控制通道已建立，在面板中启动 Server 或连接 Client');
+  };
+  ctrlWs.onclose = () => {
+    setStatus('offline', '面板断开，3s 重连...');
+    serverRunning = false; clientConnected = false;
+    pubActive = false; subActive = false;
+    updateUI();
+    setTimeout(connectCtrl, 3000);
+  };
+  ctrlWs.onmessage = (e) => {
+    try {
+      const m = JSON.parse(e.data);
+      if (m.type === 'log') {
+        addLog(m.dir, m.peer || '', m.time || '', m.text);
+        if (m.dir === 'send') msgSent++; else if (m.dir === 'recv') msgRecv++;
+        updateCounters();
+      } else if (m.type === 'status') {
+        handleStatus(m);
+      }
+    } catch(_) { addLog('recv', '?', '', e.data); }
+  };
+  ctrlWs.onerror = () => {};
+}
+connectCtrl();
+
+function handleStatus(m) {
+  const s = m.state;
+  if (s === 'server_running') {
+    serverRunning = true;
+    setStatus('online', '服务器运行中');
+    document.getElementById('srvHint').textContent = '监听: ' + (m.url || '');
+    if (activeMode === 'server') { document.getElementById('msgInput').disabled = false; document.getElementById('sendBtn').disabled = false; document.getElementById('msgInput').focus(); }
+  } else if (s === 'server_stopped') {
+    serverRunning = false;
+    setStatus('offline', '服务器已停止');
+    document.getElementById('srvHint').textContent = '';
+  } else if (s === 'client_connected') {
+    clientConnected = true;
+    setStatus('online', '已连接: ' + (m.url || ''));
+    if (activeMode === 'client') { document.getElementById('msgInput').disabled = false; document.getElementById('sendBtn').disabled = false; document.getElementById('msgInput').focus(); }
+  } else if (s === 'client_disconnected') {
+    clientConnected = false;
+    setStatus('offline', '已断开');
+  } else if (s === 'error') {
+    setStatus('error', '错误');
+    addLog('error', '', '', m.info || '错误');
+    serverRunning = false; clientConnected = false; pubActive = false; subActive = false; updateUI();
+  } else if (s === 'pub_on') {
+    pubActive = true;
+    document.getElementById('btnStartPub').disabled = false;
+    document.getElementById('btnStartPub').textContent = '启动发布';
+    document.getElementById('pubHint').textContent = 'Publisher 运行中 (topic=' + (m.topic||'DdsDebug') + ')';
+    setStatus('online', 'Publisher 运行中');
+    addLog('system', '', '', 'DDS Publisher 就绪 (domain=' + (m.domain||0) + ', topic=' + (m.topic||'') + ')');
+    if (activeMode === 'dds-pub') { document.getElementById('msgInput').disabled = false; document.getElementById('sendBtn').disabled = false; document.getElementById('msgInput').focus(); }
+  } else if (s === 'pub_off') {
+    pubActive = false;
+    document.getElementById('btnStopPub').disabled = false;
+    document.getElementById('btnStopPub').textContent = '停止';
+    if (activeMode === 'dds-pub') { document.getElementById('msgInput').disabled = true; document.getElementById('sendBtn').disabled = true; }
+    setStatus('offline', 'Publisher 已停止');
+  } else if (s === 'sub_on') {
+    subActive = true;
+    document.getElementById('btnStartSub').disabled = false;
+    document.getElementById('btnStartSub').textContent = '启动订阅';
+    document.getElementById('subHint').textContent = 'Subscriber 运行中 (topic=' + (m.topic||'DdsDebug') + ')';
+    setStatus('online', 'Subscriber 运行中');
+    addLog('system', '', '', 'DDS Subscriber 启动 (domain=' + (m.domain||0) + ', topic=' + (m.topic||'') + ')');
+    if (activeMode === 'dds-sub') { document.getElementById('msgInput').disabled = false; document.getElementById('sendBtn').disabled = false; document.getElementById('msgInput').focus(); }
+  } else if (s === 'sub_off') {
+    subActive = false;
+    document.getElementById('btnStopSub').disabled = false;
+    document.getElementById('btnStopSub').textContent = '停止';
+    if (activeMode === 'dds-sub') { document.getElementById('msgInput').disabled = true; document.getElementById('sendBtn').disabled = true; }
+    setStatus('offline', 'Subscriber 已停止');
+  } else if (s === 'client_joined') {
+    addLog('system', m.peer || '', '', '已连接');
+  } else if (s === 'client_left') {
+    addLog('system', m.peer || '', '', '已断开');
+  }
+  updateUI();
+}
+
+function switchProto(proto) {
+  activeProto = proto;
+  panelAllOff();
+  // 显示 / 隐藏模式标签按钮
+  document.querySelectorAll('.mode-tab').forEach(t => {
+    const m = t.dataset.mode;
+    if (proto === 'websocket') {
+      t.style.display = (m === 'server' || m === 'client') ? '' : 'none';
+    } else {
+      t.style.display = (m === 'dds-pub' || m === 'dds-sub') ? '' : 'none';
+    }
+  });
+  if (proto === 'websocket') { activeMode = 'server'; switchMode('server'); }
+  else { activeMode = 'dds-pub'; switchMode('dds-pub'); }
+}
+function panelAllOff() {
+  ['panelServer','panelClient','panelDdsPub','panelDdsSub'].forEach(id => document.getElementById(id).classList.add('hidden'));
+}
+function switchMode(mode) {
+  activeMode = mode;
+  panelAllOff();
+  document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
+  if (mode === 'server') {
+    document.getElementById('panelServer').classList.remove('hidden');
+  } else if (mode === 'client') {
+    document.getElementById('panelClient').classList.remove('hidden');
+  } else if (mode === 'dds-pub') {
+    document.getElementById('panelDdsPub').classList.remove('hidden');
+  } else if (mode === 'dds-sub') {
+    document.getElementById('panelDdsSub').classList.remove('hidden');
+  }
+  const isActive = (mode === 'server' && serverRunning) ||
+                   (mode === 'client' && clientConnected) ||
+                   (mode === 'dds-pub' && pubActive) ||
+                   (mode === 'dds-sub' && subActive);
+  document.getElementById('msgInput').disabled = !isActive;
+  document.getElementById('sendBtn').disabled = !isActive;
+  document.getElementById('footerLeft').textContent =
+    mode === 'server' ? 'WS Server' :
+    mode === 'client' ? 'WS Client' :
+    mode === 'dds-pub' ? 'DDS Publisher' : 'DDS Subscriber';
+}
+
+function startServer() {
+  if (!ctrlWs || ctrlWs.readyState !== WebSocket.OPEN) {
+    addLog('error', '', '', '控制通道未连接，请等待面板连接成功后再操作');
+    return;
+  }
+  ctrlWs.send(JSON.stringify({
+    cmd: 'start_server',
+    host: document.getElementById('srvHost').value || '0.0.0.0',
+    port: parseInt(document.getElementById('srvPort').value) || 8765,
+    broadcast: document.getElementById('srvBroadcast').checked,
+  }));
+}
+function stopServer() {
+  if (!ctrlWs || ctrlWs.readyState !== WebSocket.OPEN) return;
+  ctrlWs.send(JSON.stringify({cmd: 'stop_server'}));
+}
+function startClient() {
+  if (!ctrlWs || ctrlWs.readyState !== WebSocket.OPEN) {
+    addLog('error', '', '', '控制通道未连接，请等待面板连接成功后再操作');
+    return;
+  }
+  ctrlWs.send(JSON.stringify({
+    cmd: 'start_client',
+    url: document.getElementById('cliUrl').value,
+    timeout: parseFloat(document.getElementById('cliTimeout').value) || 10,
+  }));
+}
+function stopClient() {
+  if (!ctrlWs || ctrlWs.readyState !== WebSocket.OPEN) return;
+  ctrlWs.send(JSON.stringify({cmd: 'stop_client'}));
+}
+function sendMsg() {
+  const input = document.getElementById('msgInput');
+  const text = input.value.trim();
+  if (!text) return;
+  if (!ctrlWs || ctrlWs.readyState !== WebSocket.OPEN) {
+    addLog('error', '', '', '控制通道未连接，无法发送');
+    return;
+  }
+  const proto = document.getElementById('protoSelect').value;
+  ctrlWs.send(JSON.stringify({cmd: proto === 'dds' ? 'dds_send' : 'send', text: text}));
+  input.value = ''; input.focus();
+}
+function setStatus(state, text) {
+  document.getElementById('statusDot').style.background = state === 'online' ? '#3fb950' : '#f85149';
+  document.getElementById('statusText').textContent = text;
+  document.getElementById('footerLeft').textContent = text;
+}
+function updateUI() {
+  document.getElementById('btnStartServer').classList.toggle('hidden', serverRunning);
+  document.getElementById('btnStopServer').classList.toggle('hidden', !serverRunning);
+  document.getElementById('btnConnect').classList.toggle('hidden', clientConnected);
+  document.getElementById('btnDisconnect').classList.toggle('hidden', !clientConnected);
+  document.getElementById('btnStartPub').classList.toggle('hidden', pubActive);
+  document.getElementById('btnStopPub').classList.toggle('hidden', !pubActive);
+  document.getElementById('btnStartSub').classList.toggle('hidden', subActive);
+  document.getElementById('btnStopSub').classList.toggle('hidden', !subActive);
+  const isActive = (activeMode === 'server' && serverRunning) ||
+                   (activeMode === 'client' && clientConnected) ||
+                   (activeMode === 'dds-pub' && pubActive) ||
+                   (activeMode === 'dds-sub' && subActive);
+  document.getElementById('msgInput').disabled = !isActive;
+  document.getElementById('sendBtn').disabled = !isActive;
+  if (isActive) document.getElementById('msgInput').focus();
+}
+function updateCounters() {
+  document.getElementById('footerRight').textContent = '发送 ' + msgSent + ' / 接收 ' + msgRecv;
+}
+function addLog(dir, peer, time, text) {
+  const log = document.getElementById('log');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry ' + (dir === 'send' ? 'send' : dir === 'recv' ? 'recv' : dir === 'error' ? 'error' : 'system');
+  const dirLabel = dir === 'send' ? '>>' : dir === 'recv' ? '<<' : '--';
+  const dirCls = dir === 'send' ? 'send' : dir === 'recv' ? 'recv' : 'sys';
+  let bodyCls = '', displayText = text;
+  try { const obj = JSON.parse(text); if (typeof obj === 'object' && obj !== null) { displayText = JSON.stringify(obj, null, 2); bodyCls = ' json'; } } catch(_) {}
+  entry.innerHTML =
+    '<span class="log-time">' + esc(time) + '</span>' +
+    '<span class="log-dir ' + dirCls + '">' + dirLabel + '</span>' +
+    '<span class="log-peer">' + esc(peer) + '</span>' +
+    '<span class="log-body' + bodyCls + '">' + esc(displayText) + '</span>';
+  log.appendChild(entry); log.scrollTop = log.scrollHeight;
+  while (log.children.length > 500) log.firstChild.remove();
+}
+function startDdsPub() {
+  if (!ctrlWs || ctrlWs.readyState !== WebSocket.OPEN) { addLog('error', '', '', '控制通道未连接'); return; }
+  const btn = document.getElementById('btnStartPub');
+  btn.disabled = true; btn.textContent = '启动中...';
+  document.getElementById('pubHint').textContent = '正在启动 DDS Publisher...';
+  ctrlWs.send(JSON.stringify({ cmd: 'start_pub', domain: parseInt(document.getElementById('ddsDomain').value) || 0, topic: document.getElementById('ddsTopic').value || 'DdsDebug', }));
+  setTimeout(() => { if (!pubActive) { btn.disabled = false; btn.textContent = '启动发布'; document.getElementById('pubHint').textContent = '超时无响应，请检查后端日志'; addLog('error', '', '', 'DDS Publisher 启动超时：请确认 Cyclone DDS 已安装且服务端已重启'); } }, 8000);
+}
+function stopDdsPub() {
+  const btn = document.getElementById('btnStopPub');
+  btn.disabled = true; btn.textContent = '停止中...';
+  ctrlWs && ctrlWs.send(JSON.stringify({ cmd: 'stop_pub' }));
+  setTimeout(() => { if (pubActive) { btn.disabled = false; btn.textContent = '停止'; } }, 3000);
+}
+function startDdsSub() {
+  if (!ctrlWs || ctrlWs.readyState !== WebSocket.OPEN) { addLog('error', '', '', '控制通道未连接'); return; }
+  const btn = document.getElementById('btnStartSub');
+  btn.disabled = true; btn.textContent = '启动中...';
+  document.getElementById('subHint').textContent = '正在启动 DDS Subscriber...';
+  ctrlWs.send(JSON.stringify({ cmd: 'start_sub', domain: parseInt(document.getElementById('ddsSubDomain').value) || 0, topic: document.getElementById('ddsSubTopic').value || 'DdsDebug', }));
+  setTimeout(() => { if (!subActive) { btn.disabled = false; btn.textContent = '启动订阅'; document.getElementById('subHint').textContent = '超时无响应，请检查后端日志'; addLog('error', '', '', 'DDS Subscriber 启动超时：请确认 Cyclone DDS 已安装且服务端已重启'); } }, 8000);
+}
+function stopDdsSub() {
+  const btn = document.getElementById('btnStopSub');
+  btn.disabled = true; btn.textContent = '停止中...';
+  ctrlWs && ctrlWs.send(JSON.stringify({ cmd: 'stop_sub' }));
+  setTimeout(() => { if (subActive) { btn.disabled = false; btn.textContent = '停止'; } }, 3000);
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+document.getElementById('msgInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMsg(); });
+document.querySelector('.header h1').addEventListener('dblclick', () => { document.getElementById('log').innerHTML = ''; msgSent = 0; msgRecv = 0; updateCounters(); });
+</script>
+</body>
+</html>

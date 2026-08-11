@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# 本地工具配置
+.claude/
+
+# 临时文件
+*.tmp
+hub_new.py

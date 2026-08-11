@@ -1,0 +1,14 @@
+// OpenDDS 调试消息 IDL
+// 编译: opendds_idl DdsDebug.idl && tao_idl DdsDebug.idl
+// 然后: python setup_opendds.py build
+
+module DdsDebug {
+
+    @topic
+    struct DebugMessage {
+        string sender;      // 发送者标识
+        string payload;     // 消息内容 (JSON 或文本)
+        long long timestamp; // 毫秒时间戳
+    };
+
+};
