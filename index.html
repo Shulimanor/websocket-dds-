@@ -68,8 +68,42 @@ body {
 .log-dir.recv { color: var(--green); }
 .log-dir.sys { color: var(--text2); }
 .log-peer { color: var(--yellow); min-width: 80px; font-size: 11px; white-space: nowrap; }
-.log-body { flex:1; white-space: pre-wrap; word-break: break-word; }
+.log-body { flex:1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
 .log-body.json { color: #79c0ff; }
+/* JSON 折叠/展开 */
+.log-toggle { min-width: 16px; text-align: center; color: var(--text2); cursor: pointer; user-select: none; font-size: 11px; }
+.log-body .summary { cursor: pointer; }
+.log-body .json-pre { display: none; white-space: pre-wrap; word-break: break-word; font-family: inherit; margin: 0; }
+.log-entry.expanded .summary { display: none; }
+.log-entry.expanded .json-pre { display: block; }
+.log-entry.expanded .log-toggle { transform: rotate(90deg); }
+.log-int { color: var(--text2); min-width: 64px; text-align: right; font-size: 11px; white-space: nowrap; }
+/* 语法高亮 token */
+.jk { color: #79c0ff; }   /* key */
+.js { color: #7ee787; }   /* string */
+.jn { color: #ffab70; }   /* number */
+.jb { color: #d2a8ff; }   /* bool / null */
+/* 过滤条 */
+.filter-bar {
+  display: flex; align-items: center; gap: 8px; padding: 6px 16px;
+  background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; font-size: 12px;
+}
+.filter-bar input[type="text"] {
+  flex: 0 1 320px; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 12px; font-family: inherit; outline: none;
+}
+.filter-bar input[type="text"]:focus { border-color: var(--accent); }
+.filter-bar select {
+  padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 12px; font-family: inherit; outline: none;
+}
+.filter-bar label { color: var(--text2); font-size: 12px; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.filter-bar button {
+  padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text2); font-size: 12px; font-family: inherit; cursor: pointer;
+}
+.filter-bar button:hover { color: var(--text); border-color: var(--accent); }
+.flt-stats { color: var(--text2); font-size: 11px; margin-left: auto; white-space: nowrap; }
 .input-bar {
   display: flex; padding: 8px 12px; background: var(--surface);
   border-top: 1px solid var(--border); gap: 8px; flex-shrink: 0;
@@ -123,6 +157,7 @@ body {
 <div class="panel hidden" id="panelClient">
   <label>URL:</label><input type="text" value="ws://localhost:8765" id="cliUrl" class="wide">
   <label>超时(s):</label><input type="number" value="10" id="cliTimeout" class="port" min="1">
+  <label><input type="checkbox" id="cliNoPing" title="服务端不响应 keepalive ping 时勾选，避免被判定超时断开"> 禁用保活</label>
   <button class="btn-blue" id="btnConnect" onclick="startClient()">连接</button>
   <button class="btn-red hidden" id="btnDisconnect" onclick="stopClient()">断开</button>
   <span class="hint" id="cliHint"></span>
@@ -145,6 +180,15 @@ body {
   <button class="btn-red hidden" id="btnStopSub" onclick="stopDdsSub()">停止</button>
   <span class="hint" id="subHint"></span>
 </div>
+</div>
+
+<div class="filter-bar">
+  <input type="text" id="fltText" placeholder="过滤: start_sim 或 action=start_sim（逗号=AND，支持 info.name=xx）">
+  <select id="fltAction"><option value="">全部动作</option></select>
+  <label><input type="checkbox" id="fltOnlyJson"> 仅JSON</label>
+  <button id="fltClear" title="清除过滤">清除</button>
+  <button id="fltExpand" title="展开/折叠全部 JSON">展开全部</button>
+  <span class="flt-stats" id="fltStats"></span>
 </div>
 
 <div class="log" id="log"></div>
@@ -323,6 +367,7 @@ function startClient() {
     cmd: 'start_client',
     url: document.getElementById('cliUrl').value,
     timeout: parseFloat(document.getElementById('cliTimeout').value) || 10,
+    no_ping: document.getElementById('cliNoPing').checked,
   }));
 }
 function stopClient() {
@@ -372,16 +417,151 @@ function addLog(dir, peer, time, text) {
   entry.className = 'log-entry ' + (dir === 'send' ? 'send' : dir === 'recv' ? 'recv' : dir === 'error' ? 'error' : 'system');
   const dirLabel = dir === 'send' ? '>>' : dir === 'recv' ? '<<' : '--';
   const dirCls = dir === 'send' ? 'send' : dir === 'recv' ? 'recv' : 'sys';
-  let bodyCls = '', displayText = text;
-  try { const obj = JSON.parse(text); if (typeof obj === 'object' && obj !== null) { displayText = JSON.stringify(obj, null, 2); bodyCls = ' json'; } } catch(_) {}
-  entry.innerHTML =
-    '<span class="log-time">' + esc(time) + '</span>' +
+
+  // 元数据（供过滤 / 间隔计算）
+  entry._arr = performance.now();
+  entry._textLower = text.toLowerCase();
+  let obj = null;
+  try { obj = JSON.parse(text); if (typeof obj !== 'object' || obj === null) obj = null; } catch(_) {}
+  entry._obj = obj;
+
+  // 头部：时间 / 方向 / 对端 / 间隔
+  let html = '<span class="log-time">' + esc(time) + '</span>' +
     '<span class="log-dir ' + dirCls + '">' + dirLabel + '</span>' +
-    '<span class="log-peer">' + esc(peer) + '</span>' +
-    '<span class="log-body' + bodyCls + '">' + esc(displayText) + '</span>';
-  log.appendChild(entry); log.scrollTop = log.scrollHeight;
+    '<span class="log-peer">' + esc(peer) + '</span>';
+
+  if (obj) {
+    // JSON 消息：折叠 + 展开
+    const summary = JSON.stringify(obj);
+    const sumText = summary.length > 140 ? summary.slice(0, 140) + '…' : summary;
+    entry.innerHTML =
+      '<span class="log-toggle" title="点击展开/折叠">▸</span>' +
+      html +
+      '<span class="log-body json"><span class="summary">' + esc(sumText) + '</span>' +
+      '<pre class="json-pre">' + highlightJson(obj) + '</pre></span>' +
+      '<span class="log-int"></span>';
+    entry.classList.add('json');
+    // 折叠/展开：点 toggle 或 body 均可
+    const body = entry.querySelector('.log-body');
+    entry.querySelector('.log-toggle').addEventListener('click', () => { entry.classList.toggle('expanded'); });
+    body.addEventListener('click', () => { entry.classList.toggle('expanded'); });
+    // 收集 action 值用于下拉过滤
+    if (obj.action !== undefined && obj.action !== null) {
+      observedActions.add(String(obj.action));
+      refreshActionSelect();
+    }
+  } else {
+    // 普通文本：单行显示，无折叠
+    entry.innerHTML = '<span class="log-toggle" style="visibility:hidden">▸</span>' + html +
+      '<span class="log-body">' + esc(text) + '</span><span class="log-int"></span>';
+  }
+
+  // 过滤：不匹配则隐藏（保留 DOM，取消过滤后可见）
+  log.appendChild(entry);
+  applyFilter();
+  log.scrollTop = log.scrollHeight;
   while (log.children.length > 500) log.firstChild.remove();
 }
+
+// ---- JSON 语法高亮 -------------------------------------------------------
+function highlightJson(obj) {
+  const s = JSON.stringify(obj, null, 2)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, (m) => {
+    let cls = 'jn'; // number
+    if (/^"/.test(m)) cls = /:\s*"?$/.test(m) ? 'jk' : 'js'; // key vs string
+    else if (/^(true|false|null)$/.test(m)) cls = 'jb';
+    return '<span class="' + cls + '">' + m + '</span>';
+  });
+}
+
+// ---- 过滤 ----------------------------------------------------------------
+const observedActions = new Set();
+
+function getPath(obj, path) {
+  return path.split('.').reduce((o, k) => (o === null || o === undefined ? undefined : o[k]), obj);
+}
+
+function msgMatchesFilter(entry) {
+  const act = document.getElementById('fltAction').value;
+  if (act) {
+    if (!entry._obj || String(entry._obj.action) !== act) return false;
+  }
+  if (document.getElementById('fltOnlyJson').checked && !entry._obj) return false;
+  const f = document.getElementById('fltText').value.trim();
+  if (!f) return true;
+  for (const clause of f.split(',')) {
+    const c = clause.trim();
+    if (!c) continue;
+    const eq = c.match(/^([\w.$-]+)\s*=\s*(.+)$/);
+    if (eq) {
+      const v = getPath(entry._obj, eq[1]);
+      if (String(v) !== eq[2].trim()) return false;
+    } else {
+      if (!entry._textLower.includes(c.toLowerCase())) return false;
+    }
+  }
+  return true;
+}
+
+function refreshActionSelect() {
+  const sel = document.getElementById('fltAction');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">全部动作</option>' +
+    [...observedActions].sort().map(a => '<option value="' + esc(a) + '">' + esc(a) + '</option>').join('');
+  sel.value = cur;
+}
+
+function applyFilter() {
+  const log = document.getElementById('log');
+  let visible = 0;
+  for (const entry of log.children) {
+    const ok = msgMatchesFilter(entry);
+    entry.style.display = ok ? '' : 'none';
+    if (ok) visible++;
+  }
+  document.getElementById('fltStats').textContent = '匹配 ' + visible + ' / ' + log.children.length;
+  refreshIntervals();
+}
+
+// ---- 相邻事件间隔（到达时间差） ------------------------------------------
+function fmtDelta(ms) {
+  if (ms < 1000) return '+' + Math.round(ms) + 'ms';
+  return '+' + (ms / 1000).toFixed(1) + 's';
+}
+
+function refreshIntervals() {
+  const log = document.getElementById('log');
+  let prev = null;
+  for (const entry of log.children) {
+    if (entry.style.display === 'none') continue;
+    const badge = entry.querySelector('.log-int');
+    if (!badge) continue;
+    if (prev === null) { badge.textContent = ''; }
+    else { badge.textContent = fmtDelta(entry._arr - prev); }
+    prev = entry._arr;
+  }
+}
+
+// 过滤条事件
+document.getElementById('fltText').addEventListener('input', applyFilter);
+document.getElementById('fltAction').addEventListener('change', applyFilter);
+document.getElementById('fltOnlyJson').addEventListener('change', applyFilter);
+document.getElementById('fltClear').addEventListener('click', () => {
+  document.getElementById('fltText').value = '';
+  document.getElementById('fltAction').value = '';
+  document.getElementById('fltOnlyJson').checked = false;
+  applyFilter();
+});
+document.getElementById('fltExpand').addEventListener('click', () => {
+  const log = document.getElementById('log');
+  const want = !log.classList.contains('all-expanded');
+  log.classList.toggle('all-expanded', want);
+  document.getElementById('fltExpand').textContent = want ? '折叠全部' : '展开全部';
+  for (const entry of log.children) {
+    if (entry._obj) entry.classList.toggle('expanded', want);
+  }
+});
 function startDdsPub() {
   if (!ctrlWs || ctrlWs.readyState !== WebSocket.OPEN) { addLog('error', '', '', '控制通道未连接'); return; }
   const btn = document.getElementById('btnStartPub');

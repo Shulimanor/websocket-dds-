@@ -30,7 +30,23 @@ from debug_tool.logger import (
 from debug_tool.utils import format_message, try_parse_json, async_stdin_lines
 from debug_tool.dds import DdsEngine
 
-_HTML_PATH = Path(__file__).parent.parent / "index.html"
+def _resolve_frontend_path() -> Path:
+    """定位前端 index.html。
+
+    源码运行：debug_tool/ 的上一级目录。
+    PyInstaller 打包（--add-data 'index.html;.' 打进包内）：运行时解压的临时目录。
+    """
+    candidates = [
+        Path(__file__).resolve().parent.parent / "index.html",
+        Path(getattr(sys, "_MEIPASS", "") or ".") / "index.html",
+    ]
+    for p in candidates:
+        if p.is_file():
+            return p
+    return candidates[0]
+
+
+_HTML_PATH = _resolve_frontend_path()
 try:
     DEBUG_PAGE = _HTML_PATH.read_text(encoding="utf-8")
 except FileNotFoundError:
@@ -40,6 +56,32 @@ except FileNotFoundError:
 
 def _uid() -> str:
     return uuid.uuid4().hex[:8]
+
+
+def _connect_candidates(url: str) -> list[str]:
+    """生成连接候选地址。
+
+    Windows 上 'localhost' 通常先解析到 IPv6 (::1)，而很多服务只监听 IPv4
+    (127.0.0.1)，导致 ws://localhost 连不上、ws://127.0.0.1 却可以。
+    这里对 localhost 生成 [IPv4, 原样] 两个候选，逐个尝试。
+    """
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        u = urlsplit(url)
+    except Exception:
+        return [url]
+    if not u.scheme or not u.hostname:
+        return [url]
+    if u.hostname.lower() != "localhost":
+        return [url]
+    netloc = "127.0.0.1"
+    if u.username:
+        netloc = u.username + (":" + u.password if u.password else "") + "@" + netloc
+    if u.port:
+        netloc += f":{u.port}"
+    alt = urlunsplit((u.scheme, netloc, u.path, u.query, u.fragment))
+    # IPv4 在前（本机工具最常见），原样兜底（兼容仅 IPv6 服务）
+    return [alt, url]
 
 
 class DebugHub:
@@ -260,6 +302,7 @@ class DebugHub:
                     no_verify=bool(obj.get("no_verify", False)),
                     ssl_cert=obj.get("ssl_cert") or None,
                     ssl_key=obj.get("ssl_key") or None,
+                    no_ping=bool(obj.get("no_ping", False)),
                     panel_id=pid)
             elif cmd == "stop_client":
                 await self._stop_client(panel_id=pid)
@@ -384,7 +427,7 @@ class DebugHub:
 
     async def _start_client(self, url: str, timeout: float, binary: bool,
                              no_verify: bool, ssl_cert: str | None, ssl_key: str | None,
-                             panel_id: str | None = None) -> None:
+                             no_ping: bool = False, panel_id: str | None = None) -> None:
         await self._stop_client(panel_id=panel_id)
         ssl_ctx: ssl.SSLContext | None = None
         if url.startswith("wss://"):
@@ -395,24 +438,50 @@ class DebugHub:
                 ssl_ctx.check_hostname = False
                 ssl_ctx.verify_mode = ssl.CERT_NONE
 
+        # 保活参数：默认 20s 收不到 pong 判死；服务端不响应 ping 时禁用（None 关闭）
+        ping_interval = None if no_ping else 20
+        ping_timeout = None if no_ping else 20
+
+        candidates = _connect_candidates(url)
+
         async def loop() -> None:
             try:
-                async with websockets.connect(url, ssl=ssl_ctx, open_timeout=timeout) as ws:
-                    self._client_ws = ws
-                    log_info(f"[Client] 已连接: {url}")
-                    await self._push_status("client_connected", panel_id=panel_id, url=url)
-                    async for msg in ws:
-                        self._msg_recv += 1
-                        text = format_message(msg, binary)
-                        p = str(ws.remote_address) if ws.remote_address else url
-                        log_recv(f"[{p}] {text}")
-                        await self._push_log("recv", p, text if isinstance(msg, str) else format_message(msg, True), panel_id=pid)
+                last_err: Exception | None = None
+                for cand in candidates:
+                    try:
+                        async with websockets.connect(cand, ssl=ssl_ctx, open_timeout=timeout,
+                                                      ping_interval=ping_interval,
+                                                      ping_timeout=ping_timeout) as ws:
+                            self._client_ws = ws
+                            log_info(f"[Client] 已连接: {cand}")
+                            await self._push_status("client_connected", panel_id=panel_id, url=cand)
+                            async for msg in ws:
+                                self._msg_recv += 1
+                                text = format_message(msg, binary)
+                                p = str(ws.remote_address) if ws.remote_address else cand
+                                log_recv(f"[{p}] {text}")
+                                await self._push_log("recv", p, text if isinstance(msg, str) else format_message(msg, True), panel_id=panel_id)
+                        return
+                    except (asyncio.TimeoutError, ConnectionRefusedError, OSError,
+                            websockets.InvalidURI, websockets.ConnectionClosed) as exc:
+                        if self._client_ws is not None:
+                            # 已建立连接后发生的断开 → 交给外层统一处理
+                            raise
+                        last_err = exc
+                raise last_err or ConnectionError(f"无法连接 {url}")
             except asyncio.TimeoutError:
                 log_error(f"[Client] 连接超时: {url}")
                 await self._push_status("error", panel_id=panel_id, info=f"连接超时: {url}")
             except (ConnectionRefusedError, OSError) as exc:
                 log_error(f"[Client] 连接失败: {exc}")
                 await self._push_status("error", panel_id=panel_id, info=f"连接失败: {exc}")
+            except websockets.ConnectionClosed as exc:
+                # 对端断开（未走 close 握手 / keepalive ping 超时）——正常断开，非错误
+                if exc.code == 1011 and exc.reason and "ping timeout" in exc.reason:
+                    log_warn(f"[Client] 保活超时断开: {url}（服务端未响应 ping；可在面板勾选「禁用保活」后重连）")
+                else:
+                    log_warn(f"[Client] 连接断开: {url} (code={exc.code}, {exc.reason or '对端未发送 close 帧'})")
+                await self._push_log("system", "", f"连接断开: code={exc.code}", panel_id=panel_id)
             except Exception as exc:
                 log_error(f"[Client] 异常: {exc}")
                 await self._push_status("error", panel_id=panel_id, info=str(exc))

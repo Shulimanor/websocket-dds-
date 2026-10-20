@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>方案综合效能对比 · 四阶段渐进</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js">
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js">
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: radial-gradient(900px 500px at 15% -10%, rgba(59, 130, 246, 0.10), transparent 60%),
+                radial-gradient(800px 500px at 95% 5%, rgba(34, 211, 238, 0.06), transparent 55%),
+                #080d18;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', 'Noto Sans SC', system-ui, sans-serif;
+            padding: 24px;
+        }
+
+        .card {
+            background: rgba(14, 22, 38, 0.85);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(30, 58, 95, 0.6);
+            border-radius: 20px;
+            padding: 28px 30px 24px;
+            max-width: 760px;
+            width: 100%;
+            box-shadow: 0 24px 56px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(59, 130, 246, 0.08);
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #e8ecf4;
+            letter-spacing: 0.3px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header h1 span {
+            background: linear-gradient(135deg, #3b82f6, #22d3ee);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header .badge {
+            font-size: 12px;
+            color: #8a94a8;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            padding: 4px 14px;
+            border-radius: 40px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .legend-row {
+            display: flex;
+            justify-content: center;
+            gap: 32px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #b3bccd;
+            font-weight: 500;
+        }
+
+        .legend-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 4px;
+            flex-shrink: 0;
+        }
+
+        .legend-dot.red {
+            background: rgba(239, 68, 68, 0.75);
+            border: 1px solid #ef4444;
+        }
+        .legend-dot.blue {
+            background: rgba(59, 130, 246, 0.75);
+            border: 1px solid #3b82f6;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            width: 100%;
+            height: auto;
+            margin: 0 auto;
+        }
+
+        canvas {
+            display: block;
+            width: 100% !important;
+            height: auto !important;
+            max-height: 380px;
+            aspect-ratio: 16 / 10;
+            background: transparent;
+            border-radius: 16px;
+        }
+
+        .compare-note {
+            margin-top: 16px;
+            padding: 14px 18px;
+            background: rgba(16, 185, 129, 0.06);
+            border-radius: 10px;
+            border: 1px solid rgba(16, 185, 129, 0.14);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .compare-note .big {
+            font-size: 14px;
+            color: #b3bccd;
+        }
+
+        .compare-note .big b {
+            color: #10b981;
+            font-size: 18px;
+        }
+
+        .compare-note .detail {
+            font-size: 12px;
+            color: #8a94a8;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .compare-note .detail span {
+            margin: 0 6px;
+        }
+
+        .compare-note .detail .red-text {
+            color: #ef4444;
+        }
+        .compare-note .detail .blue-text {
+            color: #3b82f6;
+        }
+
+        .phase-indicator {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+
+        .phase-indicator .phase-item {
+            font-size: 12px;
+            color: #6b7d91;
+            font-family: 'JetBrains Mono', monospace;
+            padding: 4px 14px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.4s ease;
+        }
+
+        .phase-indicator .phase-item.active {
+            color: #e8ecf4;
+            border-color: rgba(59, 130, 246, 0.4);
+            background: rgba(59, 130, 246, 0.12);
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.08);
+        }
+
+        .phase-indicator .phase-item .phase-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+
+        .phase-indicator .phase-item .phase-dot.red {
+            background: #ef4444;
+        }
+        .phase-indicator .phase-item .phase-dot.blue {
+            background: #3b82f6;
+        }
+
+        .footer-note {
+            margin-top: 14px;
+            text-align: center;
+            font-size: 12px;
+            color: #6b7d91;
+            border-top: 1px solid rgba(255, 255, 255, 0.04);
+            padding-top: 12px;
+            letter-spacing: 0.2px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .footer-note i {
+            font-style: normal;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 2px 12px;
+            border-radius: 20px;
+        }
+
+        .chart-error {
+            display: none;
+            color: #8a94a8;
+            text-align: center;
+            padding: 40px 20px;
+            font-size: 14px;
+            line-height: 2;
+        }
+        .chart-error.show {
+            display: block;
+        }
+        .chart-error .retry-btn {
+            margin-top: 12px;
+            padding: 8px 24px;
+            background: rgba(59, 130, 246, 0.2);
+            border: 1px solid #3b82f6;
+            color: #3b82f6;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .chart-error .retry-btn:hover {
+            background: rgba(59, 130, 246, 0.3);
+        }
+
+        .loading-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #8a94a8;
+            font-size: 14px;
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(8, 13, 24, 0.4);
+            border-radius: 16px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.4s ease;
+            z-index: 5;
+        }
+
+        .loading-overlay.show {
+            opacity: 1;
+        }
+
+        .loading-overlay .spinner {
+            display: inline-block;
+            width: 22px;
+            height: 22px;
+            border: 2px solid rgba(59, 130, 246, 0.15);
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 12px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @media (max-width: 480px) {
+            .card {
+                padding: 16px 12px;
+            }
+            .header h1 {
+                font-size: 15px;
+            }
+            .legend-row {
+                gap: 16px;
+            }
+            .compare-note {
+                flex-direction: column;
+                text-align: center;
+            }
+            .compare-note .detail {
+                font-size: 11px;
+            }
+            .phase-indicator {
+                gap: 8px;
+            }
+            .phase-indicator .phase-item {
+                font-size: 10px;
+                padding: 3px 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <div class="header">
+            <h1>📊 方案 <span>综合效能对比</span></h1>
+            <div class="badge" id="badgeCount">N=50 AVG</div>
+        </div>
+
+        <div class="legend-row">
+            <div class="legend-item">
+                <span class="legend-dot blue"></span>
+                🔵 方案1：现役装备
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot red"></span>
+                🔴 方案2：DB增强系统
+            </div>
+        </div>
+
+        <div class="chart-wrapper">
+            <canvas id="compareChart" width="800" height="500"></canvas>
+            <div class="loading-overlay show" id="loadingOverlay">
+                <span class="spinner"></span>
+                <span>数据加载中 ...</span>
+            </div>
+            <div class="chart-error" id="chartError">
+                ⚠️ 图表库加载失败<br>
+                <small>请检查网络连接后刷新页面</small><br>
+                <button class="retry-btn" onclick="location.reload()">🔄 重新加载</button>
+            </div>
+        </div>
+
+        <!-- 阶段指示器（顺序：效能→效果→效率→效益） -->
+        <div class="phase-indicator" id="phaseIndicator">
+            <div class="phase-item" data-phase="0">
+                <span class="phase-dot blue"></span><span class="phase-dot red"></span>
+                ① 作战效能
+            </div>
+            <div class="phase-item" data-phase="1">
+                <span class="phase-dot blue"></span><span class="phase-dot red"></span>
+                ② 作战效果
+            </div>
+            <div class="phase-item" data-phase="2">
+                <span class="phase-dot blue"></span><span class="phase-dot red"></span>
+                ③ 作战效率
+            </div>
+            <div class="phase-item" data-phase="3">
+                <span class="phase-dot blue"></span><span class="phase-dot red"></span>
+                ④ 作战效益
+            </div>
+        </div>
+
+        <div class="compare-note">
+            <div class="big">
+                ✅ DB增强方案 较 现役方案 综合效能提升
+                <b id="compareLift">+34.6%</b>
+            </div>
+            <div class="detail">
+                <span class="blue-text">● S1: <span id="s1Total">0.0000</span></span>
+                <span>|</span>
+                <span class="red-text">● S2: <span id="s2Total">0.0000</span></span>
+            </div>
+        </div>
+
+        <div class="footer-note">
+            <i>按「效能→效果→效率→效益」顺序渐进生长 · 双击重放</i>
+        </div>
+    </div>
+
+    <script>
+        // =====================================================================
+        // 检测图表库是否加载成功
+        // =====================================================================
+        if (typeof Chart === 'undefined') {
+            document.getElementById('loadingOverlay').classList.remove('show');
+            document.getElementById('chartError').classList.add('show');
+            document.getElementById('compareChart').style.display = 'none';
+            throw new Error('Chart.js 加载失败');
+        }
+
+        var hasDatalabels = typeof ChartDataLabels !== 'undefined';
+
+        // =====================================================================
+        // 固定数据（用户指定）
+        // =====================================================================
+        // 数据顺序：效能、效果、效率、效益
+        // 现役：效能0.491, 效果0.224, 效率1.000, 效益0.339
+        // DB：  效能0.640, 效果0.370, 效率1.000, 效益0.639
+        const FIXED_DATA = {
+            s1: [0.491, 0.224, 1.000, 0.339],
+            s2: [0.64, 0.37, 1.000, 0.639]
+        };
+
+        // 计算提升百分比
+        function calcLift(s1, s2) {
+            return s1 > 0 ? ((s2 - s1) / s1 * 100) : 0;
+        }
+
+        const overallLift = calcLift(FIXED_DATA.s1[0], FIXED_DATA.s2[0]);
+
+        // =====================================================================
+        // 四阶段渐进动画（顺序：效能→效果→效率→效益）
+        // =====================================================================
+        function animateFourPhases(chart, targetData1, targetData2, duration) {
+            const totalPoints = 4;
+            const phaseDuration = duration / totalPoints;
+            const zero = [0, 0, 0, 0];
+
+            // 确保从0开始
+            chart.data.datasets[0].data = zero.slice();
+            chart.data.datasets[1].data = zero.slice();
+            chart.update('none');
+
+            const phaseItems = document.querySelectorAll('.phase-item');
+
+            let currentData1 = zero.slice();
+            let currentData2 = zero.slice();
+            let startTime = 0;
+            let completedPhase = -1;
+
+            function easeOutCubic(t) {
+                return 1 - Math.pow(1 - t, 3);
+            }
+
+            function step(now) {
+                if (!startTime) startTime = now;
+
+                const elapsed = now - startTime;
+                const phaseIndex = Math.min(Math.floor(elapsed / phaseDuration), totalPoints - 1);
+                const phaseProgress = Math.min((elapsed - phaseIndex * phaseDuration) / phaseDuration, 1);
+                const easedProgress = easeOutCubic(phaseProgress);
+
+                // 更新阶段指示器
+                if (phaseIndex !== completedPhase) {
+                    completedPhase = phaseIndex;
+                    phaseItems.forEach((el, idx) => {
+                        el.classList.toggle('active', idx === phaseIndex);
+                    });
+                }
+
+                // 计算每个柱子的值（按显示顺序索引）
+                for (let i = 0; i < totalPoints; i++) {
+                    if (i < phaseIndex) {
+                        currentData1[i] = targetData1[i];
+                        currentData2[i] = targetData2[i];
+                    } else if (i === phaseIndex) {
+                        currentData1[i] = targetData1[i] * easedProgress;
+                        currentData2[i] = targetData2[i] * easedProgress;
+                    } else {
+                        currentData1[i] = 0;
+                        currentData2[i] = 0;
+                    }
+                }
+
+                chart.data.datasets[0].data = currentData1.slice();
+                chart.data.datasets[1].data = currentData2.slice();
+                chart.update('none');
+
+                // 全部完成
+                if (phaseIndex >= totalPoints - 1 && phaseProgress >= 1) {
+                    chart.data.datasets[0].data = targetData1.slice();
+                    chart.data.datasets[1].data = targetData2.slice();
+                    chart.update('none');
+                    phaseItems.forEach(el => el.classList.remove('active'));
+                    return;
+                }
+
+                requestAnimationFrame(step);
+            }
+
+            requestAnimationFrame(step);
+        }
+
+        // =====================================================================
+        // 渲染对比柱状图
+        // =====================================================================
+        function renderCompareChart() {
+            const ctx = document.getElementById('compareChart').getContext('2d');
+
+            // 使用固定数据
+            const target1 = FIXED_DATA.s1.slice();
+            const target2 = FIXED_DATA.s2.slice();
+            const zero = [0, 0, 0, 0];
+
+            // 更新摘要信息
+            document.getElementById('compareLift').textContent = '+' + overallLift.toFixed(1) + '%';
+            document.getElementById('s1Total').textContent = target1[0].toFixed(4);
+            document.getElementById('s2Total').textContent = target2[0].toFixed(4);
+            document.getElementById('badgeCount').textContent = '固定数据';
+
+            // 图表标签顺序：效能、效果、效率、效益
+            const displayLabels = ['⚙️ 作战效能', '🎯 作战效果', '⚡ 作战效率', '💰 作战效益'];
+
+            var plugins = [];
+            if (hasDatalabels) {
+                plugins.push(ChartDataLabels);
+            }
+
+            const chart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: displayLabels,
+                    datasets: [{
+                        label: '🔵 方案1：现役装备',
+                        data: zero.slice(),
+                        backgroundColor: 'rgba(59,130,246,0.75)',
+                        borderColor: '#3b82f6',
+                        borderWidth: 1.5,
+                        borderRadius: 4,
+                        barThickness: 32,
+                        barPercentage: 0.7
+                    }, {
+                        label: '🔴 方案2：DB增强系统',
+                        data: zero.slice(),
+                        backgroundColor: 'rgba(239,68,68,0.75)',
+                        borderColor: '#ef4444',
+                        borderWidth: 1.5,
+                        borderRadius: 4,
+                        barThickness: 32,
+                        barPercentage: 0.7
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    animation: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 1.1,
+                            grid: {
+                                color: 'rgba(255,255,255,0.06)'
+                            },
+                            ticks: {
+                                color: '#8a94a8',
+                                font: {
+                                    size: 11,
+                                    family: 'JetBrains Mono, monospace'
+                                },
+                                callback: function(value) { return value.toFixed(2); }
+                            }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: {
+                                color: '#e8ecf4',
+                                font: {
+                                    size: 13,
+                                    weight: '600',
+                                    family: 'Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif'
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(10, 16, 30, 0.92)',
+                            titleColor: '#e8ecf4',
+                            bodyColor: '#b3bccd',
+                            borderColor: 'rgba(59,130,246,0.2)',
+                            borderWidth: 1,
+                            cornerRadius: 10,
+                            padding: 12,
+                            titleFont: { size: 13, weight: '600' },
+                            bodyFont: { size: 13, family: 'JetBrains Mono, monospace' },
+                            callbacks: {
+                                label: function(context) {
+                                    return context.dataset.label + ': ' + context.raw.toFixed(4);
+                                }
+                            }
+                        },
+                        datalabels: hasDatalabels ? {
+                            display: true,
+                            anchor: 'end',
+                            align: 'top',
+                            offset: 2,
+                            color: '#e8ecf4',
+                            font: {
+                                size: 10,
+                                weight: 'bold',
+                                family: 'JetBrains Mono, monospace'
+                            },
+                            formatter: function(value) {
+                                return value.toFixed(3);
+                            }
+                        } : undefined
+                    }
+                },
+                plugins: plugins
+            });
+
+            // 启动四阶段渐进动画（顺序：效能→效果→效率→效益）
+            setTimeout(() => {
+                animateFourPhases(chart, target1, target2, 3200);
+            }, 300);
+
+            return chart;
+        }
+
+        // =====================================================================
+        // 重放动画
+        // =====================================================================
+        function replayAnimation(chart) {
+            const target1 = FIXED_DATA.s1.slice();
+            const target2 = FIXED_DATA.s2.slice();
+            animateFourPhases(chart, target1, target2, 3200);
+        }
+
+        // =====================================================================
+        // 初始化
+        // =====================================================================
+        window.addEventListener('DOMContentLoaded', function() {
+            try {
+                document.getElementById('loadingOverlay').classList.remove('show');
+
+                const chart = renderCompareChart();
+                window.compareChart = chart;
+
+                // 双击重放动画
+                const canvas = document.getElementById('compareChart');
+                canvas.addEventListener('dblclick', function() {
+                    replayAnimation(chart);
+                });
+            } catch (e) {
+                console.error('渲染对比图失败:', e);
+                document.getElementById('loadingOverlay').classList.remove('show');
+                document.getElementById('chartError').classList.add('show');
+                document.getElementById('compareChart').style.display = 'none';
+            }
+        });
+    </script>
+
+</body>
+</html>

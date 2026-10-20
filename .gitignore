@@ -11,3 +11,12 @@ venv/
 # 临时文件
 *.tmp
 hub_new.py
+
+# 打包产物
+build/
+dist/
+*.spec
+
+# 浏览器自动化运行时目录
+dumate/.dumate/
+/.dumate/
